@@ -32,7 +32,7 @@ let lordRoleMembers = [];
 const activePolls = {}; // Track active polls and cooldowns
 
 function showErrorMsg(err) {
-  console.error("ERROR: noble_commands.js", err);
+  console.error("ERROR: lord_commands.js", err);
 }
 
 async function setupLordBotEvents(client, lastMessageId) {
@@ -253,6 +253,7 @@ async function startTimedPoll(
           const participationRate =
             Object.keys(activePolls[userId].joinedLords).length /
             lordRoleMembers.size;
+          console.log("participationRate1---------------->", participationRate);
           await buttonInteraction.reply({
             content: `You have joined the poll!`,
             ephemeral: true,
@@ -264,6 +265,7 @@ async function startTimedPoll(
               client,
               interaction
             ); // NEW: Notify members poll ended successfully
+            console.log("I am wrong running 1");
             await updateTargetRole(
               client,
               interaction,
@@ -279,6 +281,10 @@ async function startTimedPoll(
         const participationRate =
           Object.keys(activePolls[userId].joinedLords).length /
           lordRoleMembers.size;
+        console.log(
+          "participationRate2-------------------->",
+          participationRate
+        );
         if (participationRate < LordNobleTimedPollWinningRate) {
           await notifyAll(
             client,
@@ -295,6 +301,7 @@ async function startTimedPoll(
             client,
             interaction
           ); // NEW: Notify members poll ended successfully
+          console.log("I am wrong running 2");
           await updateTargetRole(
             client,
             interaction,
@@ -324,7 +331,7 @@ async function startTimedPoll(
             Object.keys(activePolls[userId].joinedLords).length /
             lordRoleMembers.size;
           console.log(
-            "Joined Members length------------------------------------>",
+            "participationRate3----------------->",
             participationRate
           );
           await buttonInteraction.reply({
@@ -338,6 +345,7 @@ async function startTimedPoll(
               client,
               interaction
             ); // NEW: Notify members poll ended successfully
+            console.log("I am wrong running 3");
             await updateTargetRole(
               client,
               interaction,
@@ -353,6 +361,7 @@ async function startTimedPoll(
         const participationRate =
           Object.keys(activePolls[userId].joinedLords).length /
           lordRoleMembers.size;
+        console.log("participationRate4----------------->", participationRate);
         if (participationRate < LordKingTimedPollWinningRate) {
           await notifyAll(
             client,
@@ -369,6 +378,7 @@ async function startTimedPoll(
             client,
             interaction
           ); // NEW: Notify members poll ended successfully
+          console.log("I am wrong running 4");
           await updateTargetRole(
             client,
             interaction,
@@ -450,6 +460,58 @@ async function updateTargetRole(
   }
 }
 
+// Function to clear previous bot messages in a channel
+async function clearPreviousMessages(client, channelId, botId) {
+  try {
+    const channel = await client.channels.fetch(channelId);
+    let shouldContinue = true;
+    while (shouldContinue) {
+      const fetchedMessages = await channel.messages.fetch({ limit: 100 });
+      const botMessages = fetchedMessages.filter(
+        (msg) => msg.author.id !== botId // Filter out any messages not from this bot
+      );
+
+      if (!botMessages.size) {
+        shouldContinue = false;
+        console.log("No more messages to delete.");
+        break;
+      }
+
+      const messageIds = botMessages.map((msg) => msg.id);
+
+      try {
+        await channel.bulkDelete(messageIds);
+        console.log(`Bulk deleted ${messageIds.length} messages.`);
+      } catch (err) {
+        console.error(`Failed to bulk delete messages. Error: ${err}`);
+      }
+
+      // Respect rate limits by waiting 1 second before the next batch
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  } catch (err) {
+    console.error(`Error in clearPreviousMessages: ${err}`);
+  }
+}
+
+// Function to ensure the bot has correct permissions
+async function ensureBotHasPermissions(client, channelId) {
+  try {
+    const channel = await client.channels.fetch(channelId);
+    const botMember = await channel.guild.members.fetch(client.user.id);
+    const botPermissions = channel.permissionsFor(botMember);
+
+    if (!botPermissions.has("MANAGE_MESSAGES")) {
+      console.error("Bot does not have MANAGE_MESSAGES permission.");
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error(`Error checking bot permissions: ${err}`);
+    return false;
+  }
+}
+
 async function resetPoll(interaction, client) {
   try {
     const userId = interaction.user.id;
@@ -458,42 +520,19 @@ async function resetPoll(interaction, client) {
     selectedNobleId = "";
     selectedLordId = "";
     activePolls[userId] = null;
-
-    const channel = await client.channels.fetch(process.env.CHANNELIDLORD); // Fetch the channel as before
-    if (!channel) {
-      console.error("Failed to fetch noble channel.");
+    const channelId = process.env.CHANNELIDLORD;
+    const hasPermissions = await ensureBotHasPermissions(client, channelId);
+    if (!hasPermissions) {
+      console.error("Bot doesn't have the necessary permissions.");
       return;
     }
 
-    let shouldContinue = true;
-    while (shouldContinue) {
-      const messages = await channel.messages.fetch({ limit: 100 });
-      const botMessages = messages.filter(
-        (msg) => msg.author.id === client.user.id
-      );
+    await clearPreviousMessages(client, channelId, client.user.id);
 
-      if (botMessages.size === 0) {
-        shouldContinue = false;
-        console.log(`${client.user.tag}: No more messages to delete.`);
-        break;
-      }
+    // clear all messages from the bot in the noble channel
+    await clearAllMessages(client, channelId);
 
-      for (const message of botMessages.values()) {
-        // Check if the message still exists before trying to delete
-        try {
-          await message.delete();
-        } catch (error) {
-          if (error.code === 10008) {
-            console.log(`Message ${message.id} not found, skipping.`);
-          } else {
-            console.error(`Error deleting message ${message.id}: ${error}`);
-          }
-        }
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, 1000)); // Ensure rate limits are respected
-    }
-
+    // send a new command message after resetting
     await sendInteractionReply(
       interaction,
       "Poll has ended. Ready for a new one."
@@ -501,6 +540,32 @@ async function resetPoll(interaction, client) {
     await messageLordCommands(client); // Send new command message
   } catch (err) {
     showErrorMsg(err);
+  }
+}
+
+// Added function to clear all messages
+async function clearAllMessages(client, channelId) {
+  try {
+    const channel = await client.channels.fetch(channelId);
+    let shouldContinue = true;
+    while (shouldContinue) {
+      const fetchedMessages = await channel.messages.fetch({ limit: 100 });
+      if (!fetchedMessages.size) {
+        shouldContinue = false;
+        break;
+      }
+      const messageIds = fetchedMessages.map((msg) => msg.id);
+      try {
+        await channel.bulkDelete(messageIds);
+        console.log(`Bulk deleted ${messageIds.length} messages.`);
+      } catch (err) {
+        console.error(`Failed to bulk delete messages. Error: ${err}`);
+      }
+      // Respect rate limits by waiting 1 second before the next batch
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  } catch (err) {
+    console.error(`Error in clearAllMessages: ${err}`);
   }
 }
 
@@ -532,6 +597,15 @@ async function updateSelectMenu(client, lastMessageId) {
 
 async function messageLordCommands(client) {
   try {
+    const channelId = process.env.CHANNELIDLORD;
+    const hasPermissions = await ensureBotHasPermissions(client, channelId);
+    if (!hasPermissions) {
+      console.error("Bot doesn't have the necessary permissions.");
+      return;
+    }
+
+    await clearPreviousMessages(client, channelId, client.user.id);
+
     let channel = await client.channels.fetch(process.env.CHANNELIDLORD);
     const roleMemberSelectMenuNoble = new ActionRowBuilder().addComponents(
       await buildSelectMenu(client, ["noble"], "NoblesSelectMenu")
